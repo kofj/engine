@@ -31,9 +31,6 @@ struct _FlMethodChannel {
   GDestroyNotify method_call_handler_destroy_notify;
 };
 
-// Added here to stop the compiler from optimizing this function away.
-G_MODULE_EXPORT GType fl_method_channel_get_type();
-
 G_DEFINE_TYPE(FlMethodChannel, fl_method_channel, G_TYPE_OBJECT)
 
 // Called when a binary message is received on this channel.
@@ -66,8 +63,8 @@ static void message_cb(FlBinaryMessenger* messenger,
 static void message_response_cb(GObject* object,
                                 GAsyncResult* result,
                                 gpointer user_data) {
-  GTask* task = G_TASK(user_data);
-  g_task_return_pointer(task, result, g_object_unref);
+  g_autoptr(GTask) task = G_TASK(user_data);
+  g_task_return_pointer(task, g_object_ref(result), g_object_unref);
 }
 
 // Called when the channel handler is closed.
@@ -75,10 +72,6 @@ static void channel_closed_cb(gpointer user_data) {
   g_autoptr(FlMethodChannel) self = FL_METHOD_CHANNEL(user_data);
 
   self->channel_closed = TRUE;
-  // Clear the messenger so that disposing the channel will not clear the
-  // messenger's mapped channel, since `channel_closed_cb` means the messenger
-  // has abandoned this channel.
-  self->messenger = nullptr;
 
   // Disconnect handler.
   if (self->method_call_handler_destroy_notify != nullptr) {
@@ -92,10 +85,9 @@ static void channel_closed_cb(gpointer user_data) {
 static void fl_method_channel_dispose(GObject* object) {
   FlMethodChannel* self = FL_METHOD_CHANNEL(object);
 
-  if (self->messenger != nullptr) {
-    fl_binary_messenger_set_message_handler_on_channel(
-        self->messenger, self->name, nullptr, nullptr, nullptr);
-  }
+  // Note we don't have to clear the handler in messenger as it holds
+  // a reference to this object so the following code is only run after
+  // the messenger has closed the channel already.
 
   g_clear_object(&self->messenger);
   g_clear_pointer(&self->name, g_free);
@@ -186,7 +178,7 @@ G_MODULE_EXPORT void fl_method_channel_invoke_method(
       fl_method_codec_encode_method_call(self->codec, method, args, &error);
   if (message == nullptr) {
     if (task != nullptr) {
-      g_task_return_error(task, error);
+      g_task_return_error(task, g_error_copy(error));
     }
     return;
   }
@@ -204,8 +196,12 @@ G_MODULE_EXPORT FlMethodResponse* fl_method_channel_invoke_method_finish(
   g_return_val_if_fail(FL_IS_METHOD_CHANNEL(self), nullptr);
   g_return_val_if_fail(g_task_is_valid(result, self), nullptr);
 
-  g_autoptr(GTask) task = G_TASK(result);
-  GAsyncResult* r = G_ASYNC_RESULT(g_task_propagate_pointer(task, nullptr));
+  GTask* task = G_TASK(result);
+  g_autoptr(GAsyncResult) r =
+      G_ASYNC_RESULT(g_task_propagate_pointer(task, error));
+  if (r == nullptr) {
+    return nullptr;
+  }
 
   g_autoptr(GBytes) response =
       fl_binary_messenger_send_on_channel_finish(self->messenger, r, error);
@@ -224,34 +220,13 @@ gboolean fl_method_channel_respond(
   g_return_val_if_fail(FL_IS_METHOD_CHANNEL(self), FALSE);
   g_return_val_if_fail(FL_IS_BINARY_MESSENGER_RESPONSE_HANDLE(response_handle),
                        FALSE);
-  g_return_val_if_fail(FL_IS_METHOD_SUCCESS_RESPONSE(response) ||
-                           FL_IS_METHOD_ERROR_RESPONSE(response) ||
-                           FL_IS_METHOD_NOT_IMPLEMENTED_RESPONSE(response),
-                       FALSE);
+  g_return_val_if_fail(FL_IS_METHOD_RESPONSE(response), FALSE);
 
-  g_autoptr(GBytes) message = nullptr;
-  if (FL_IS_METHOD_SUCCESS_RESPONSE(response)) {
-    FlMethodSuccessResponse* r = FL_METHOD_SUCCESS_RESPONSE(response);
-    message = fl_method_codec_encode_success_envelope(
-        self->codec, fl_method_success_response_get_result(r), error);
-    if (message == nullptr) {
-      return FALSE;
-    }
-  } else if (FL_IS_METHOD_ERROR_RESPONSE(response)) {
-    FlMethodErrorResponse* r = FL_METHOD_ERROR_RESPONSE(response);
-    message = fl_method_codec_encode_error_envelope(
-        self->codec, fl_method_error_response_get_code(r),
-        fl_method_error_response_get_message(r),
-        fl_method_error_response_get_details(r), error);
-    if (message == nullptr) {
-      return FALSE;
-    }
-  } else if (FL_IS_METHOD_NOT_IMPLEMENTED_RESPONSE(response)) {
-    message = nullptr;
-  } else {
-    g_assert_not_reached();
+  g_autoptr(GBytes) message =
+      fl_method_codec_encode_response(self->codec, response, error);
+  if (message == nullptr) {
+    return FALSE;
   }
-
   return fl_binary_messenger_send_response(self->messenger, response_handle,
                                            message, error);
 }

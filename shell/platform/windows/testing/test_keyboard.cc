@@ -3,11 +3,12 @@
 // found in the LICENSE file.
 
 #include "flutter/shell/platform/windows/testing/test_keyboard.h"
-#include "flutter/shell/platform/common/json_message_codec.h"
-#include "flutter/shell/platform/embedder/test_utils/proc_table_replacement.h"
 
 #include <rapidjson/document.h>
-#include <windowsx.h>
+
+#include "flutter/fml/logging.h"
+#include "flutter/shell/platform/common/json_message_codec.h"
+#include "flutter/shell/platform/embedder/test_utils/proc_table_replacement.h"
 
 namespace flutter {
 namespace testing {
@@ -180,6 +181,12 @@ void MockEmbedderApiForKeyboard(
 
         return kSuccess;
       };
+  // Any time the associated EmbedderEngine will be mocked, such as here,
+  // the Update accessibility features must not attempt to actually push the
+  // update
+  modifier.embedder_api().UpdateAccessibilityFeatures =
+      [](FLUTTER_API_SYMBOL(FlutterEngine) engine,
+         FlutterAccessibilityFeature flags) { return kSuccess; };
   modifier.embedder_api().UpdateLocales =
       [](auto engine, const FlutterLocale** locales, size_t locales_count) {
         return kSuccess;
@@ -189,27 +196,32 @@ void MockEmbedderApiForKeyboard(
         return kSuccess;
       };
   modifier.embedder_api().Shutdown = [](auto engine) { return kSuccess; };
+  modifier.embedder_api().NotifyDisplayUpdate =
+      [](auto engine, const FlutterEngineDisplaysUpdateType update_type,
+         const FlutterEngineDisplay* embedder_displays,
+         size_t display_count) { return kSuccess; };
 }
 
-void MockMessageQueue::InjectMessageList(int count,
-                                         const Win32Message* messages) {
-  for (int i = 0; i < count; i += 1) {
-    _pending_messages.push_back(messages[i]);
+void MockMessageQueue::PushBack(const Win32Message* message) {
+  _pending_messages.push_back(*message);
+}
+
+LRESULT MockMessageQueue::DispatchFront() {
+  FML_DCHECK(!_pending_messages.empty())
+      << "Called DispatchFront while pending message queue is empty";
+  Win32Message message = _pending_messages.front();
+  _pending_messages.pop_front();
+  _sent_messages.push_back(message);
+  LRESULT result =
+      Win32SendMessage(message.message, message.wParam, message.lParam);
+  if (message.expected_result != kWmResultDontCheck) {
+    EXPECT_EQ(result, message.expected_result)
+        << "  This is the " << _sent_messages.size()
+        << ordinal(_sent_messages.size()) << " event, with\n    " << std::hex
+        << "Message 0x" << message.message << " LParam 0x" << message.lParam
+        << " WParam 0x" << message.wParam;
   }
-  while (!_pending_messages.empty()) {
-    Win32Message message = _pending_messages.front();
-    _pending_messages.pop_front();
-    _sent_messages.push_back(message);
-    LRESULT result =
-        Win32SendMessage(message.message, message.wParam, message.lParam);
-    if (message.expected_result != kWmResultDontCheck) {
-      EXPECT_EQ(result, message.expected_result)
-          << "  This is the " << _sent_messages.size()
-          << ordinal(_sent_messages.size()) << " event, with\n    " << std::hex
-          << "Message 0x" << message.message << " LParam 0x" << message.lParam
-          << " WParam 0x" << message.wParam;
-    }
-  }
+  return result;
 }
 
 BOOL MockMessageQueue::Win32PeekMessage(LPMSG lpMsg,

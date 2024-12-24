@@ -6,18 +6,16 @@
 #define FLUTTER_FLOW_LAYERS_TEXTURE_LAYER_H_
 
 #include "flutter/flow/layers/layer.h"
-#include "third_party/skia/include/core/SkPoint.h"
-#include "third_party/skia/include/core/SkSize.h"
 
 namespace flutter {
 
 class TextureLayer : public Layer {
  public:
-  TextureLayer(const SkPoint& offset,
-               const SkSize& size,
+  TextureLayer(const DlPoint& offset,
+               const DlSize& size,
                int64_t texture_id,
                bool freeze,
-               const SkSamplingOptions& sampling);
+               DlImageSampling sampling);
 
   bool IsReplacing(DiffContext* context, const Layer* layer) const override {
     return layer->as_texture_layer() != nullptr;
@@ -27,15 +25,15 @@ class TextureLayer : public Layer {
 
   const TextureLayer* as_texture_layer() const override { return this; }
 
-  void Preroll(PrerollContext* context, const SkMatrix& matrix) override;
+  void Preroll(PrerollContext* context) override;
   void Paint(PaintContext& context) const override;
 
  private:
-  SkPoint offset_;
-  SkSize size_;
+  DlPoint offset_;
+  DlSize size_;
   int64_t texture_id_;
   bool freeze_;
-  SkSamplingOptions sampling_;
+  DlImageSampling sampling_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(TextureLayer);
 };

@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 
+#include "flutter/fml/macros.h"
 #include "flutter/shell/platform/embedder/embedder.h"
 #include "flutter/shell/platform/windows/testing/engine_modifier.h"
 #include "flutter/shell/platform/windows/testing/wm_builders.h"
@@ -99,6 +100,8 @@ class MockKeyResponseController {
                                    ResponseCallback callback) {
     callback(false);
   }
+
+  FML_DISALLOW_COPY_AND_ASSIGN(MockKeyResponseController);
 };
 
 void MockEmbedderApiForKeyboard(
@@ -110,10 +113,14 @@ void MockEmbedderApiForKeyboard(
 // Subclasses must implement |Win32SendMessage| for how dispatched messages are
 // processed.
 class MockMessageQueue {
- public:
-  // Push a list of messages to the message queue, then dispatch
-  // them with |Win32SendMessage| one by one.
-  void InjectMessageList(int count, const Win32Message* messages);
+ protected:
+  // Push a message to the message queue without dispatching it.
+  void PushBack(const Win32Message* message);
+
+  // Dispatch the first message of the message queue and return its result.
+  //
+  // This method asserts that the queue is not empty.
+  LRESULT DispatchFront();
 
   // Peak the next message in the message queue.
   //
@@ -123,7 +130,7 @@ class MockMessageQueue {
                         UINT wMsgFilterMax,
                         UINT wRemoveMsg);
 
- protected:
+  // Simulate dispatching a message to the system.
   virtual LRESULT Win32SendMessage(UINT const message,
                                    WPARAM const wparam,
                                    LPARAM const lparam) = 0;
@@ -138,13 +145,17 @@ class MockMessageQueue {
 // Expect the |_target| FlutterKeyEvent has the required properties.
 #define EXPECT_EVENT_EQUALS(_target, _type, _physical, _logical, _character, \
                             _synthesized)                                    \
-  EXPECT_PRED_FORMAT2(_EventEquals, _target,                                 \
-                      (FlutterKeyEvent{                                      \
-                          .type = _type,                                     \
-                          .physical = _physical,                             \
-                          .logical = _logical,                               \
-                          .character = _character,                           \
-                          .synthesized = _synthesized,                       \
-                      }));
+  EXPECT_PRED_FORMAT2(                                                       \
+      _EventEquals, _target,                                                 \
+      (FlutterKeyEvent{                                                      \
+          /* struct_size = */ sizeof(FlutterKeyEvent),                       \
+          /* timestamp = */ 0,                                               \
+          /* type = */ _type,                                                \
+          /* physical = */ _physical,                                        \
+          /* logical = */ _logical,                                          \
+          /* character = */ _character,                                      \
+          /* synthesized = */ _synthesized,                                  \
+          /* device_type = */ kFlutterKeyEventDeviceTypeKeyboard,            \
+      }));
 
 #endif  // FLUTTER_SHELL_PLATFORM_WINDOWS_TESTING_TEST_KEYBOARD_H_

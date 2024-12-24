@@ -14,6 +14,8 @@
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterViewController_Internal.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/vsync_waiter_ios.h"
 
+FLUTTER_ASSERT_ARC
+
 namespace flutter {
 
 PlatformViewIOS::AccessibilityBridgeManager::AccessibilityBridgeManager(
@@ -39,24 +41,30 @@ void PlatformViewIOS::AccessibilityBridgeManager::Clear() {
   accessibility_bridge_.reset();
 }
 
-PlatformViewIOS::PlatformViewIOS(
-    PlatformView::Delegate& delegate,
-    const std::shared_ptr<IOSContext>& context,
-    const std::shared_ptr<FlutterPlatformViewsController>& platform_views_controller,
-    flutter::TaskRunners task_runners)
-    : PlatformView(delegate, std::move(task_runners)),
+PlatformViewIOS::PlatformViewIOS(PlatformView::Delegate& delegate,
+                                 const std::shared_ptr<IOSContext>& context,
+                                 __weak FlutterPlatformViewsController* platform_views_controller,
+                                 const flutter::TaskRunners& task_runners)
+    : PlatformView(delegate, task_runners),
       ios_context_(context),
       platform_views_controller_(platform_views_controller),
       accessibility_bridge_([this](bool enabled) { PlatformView::SetSemanticsEnabled(enabled); }),
-      platform_message_handler_(new PlatformMessageHandlerIos(task_runners)) {}
+      platform_message_handler_(
+          new PlatformMessageHandlerIos(task_runners.GetPlatformTaskRunner())) {}
 
 PlatformViewIOS::PlatformViewIOS(
     PlatformView::Delegate& delegate,
     IOSRenderingAPI rendering_api,
-    const std::shared_ptr<FlutterPlatformViewsController>& platform_views_controller,
-    flutter::TaskRunners task_runners)
+    __weak FlutterPlatformViewsController* platform_views_controller,
+    const flutter::TaskRunners& task_runners,
+    const std::shared_ptr<fml::ConcurrentTaskRunner>& worker_task_runner,
+    const std::shared_ptr<const fml::SyncSwitch>& is_gpu_disabled_sync_switch)
     : PlatformViewIOS(delegate,
-                      IOSContext::Create(rendering_api),
+                      IOSContext::Create(rendering_api,
+                                         delegate.OnPlatformViewGetSettings().enable_impeller
+                                             ? IOSRenderingBackend::kImpeller
+                                             : IOSRenderingBackend::kSkia,
+                                         is_gpu_disabled_sync_switch),
                       platform_views_controller,
                       task_runners) {}
 
@@ -67,11 +75,11 @@ void PlatformViewIOS::HandlePlatformMessage(std::unique_ptr<flutter::PlatformMes
   platform_message_handler_->HandlePlatformMessage(std::move(message));
 }
 
-fml::WeakPtr<FlutterViewController> PlatformViewIOS::GetOwnerViewController() const {
+FlutterViewController* PlatformViewIOS::GetOwnerViewController() const {
   return owner_controller_;
 }
 
-void PlatformViewIOS::SetOwnerViewController(fml::WeakPtr<FlutterViewController> owner_controller) {
+void PlatformViewIOS::SetOwnerViewController(__weak FlutterViewController* owner_controller) {
   FML_DCHECK(task_runners_.GetPlatformTaskRunner()->RunsTasksOnCurrentThread());
   std::lock_guard<std::mutex> guard(ios_surface_mutex_);
   if (ios_surface_ || !owner_controller) {
@@ -83,17 +91,17 @@ void PlatformViewIOS::SetOwnerViewController(fml::WeakPtr<FlutterViewController>
 
   // Add an observer that will clear out the owner_controller_ ivar and
   // the accessibility_bridge_ in case the view controller is deleted.
-  dealloc_view_controller_observer_.reset(
-      [[[NSNotificationCenter defaultCenter] addObserverForName:FlutterViewControllerWillDealloc
-                                                         object:owner_controller_.get()
-                                                          queue:[NSOperationQueue mainQueue]
-                                                     usingBlock:^(NSNotification* note) {
-                                                       // Implicit copy of 'this' is fine.
-                                                       accessibility_bridge_.Clear();
-                                                       owner_controller_.reset();
-                                                     }] retain]);
+  dealloc_view_controller_observer_.reset([[NSNotificationCenter defaultCenter]
+      addObserverForName:FlutterViewControllerWillDealloc
+                  object:owner_controller_
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification* note) {
+                // Implicit copy of 'this' is fine.
+                accessibility_bridge_.Clear();
+                owner_controller_ = nil;
+              }]);
 
-  if (owner_controller_ && [owner_controller_.get() isViewLoaded]) {
+  if (owner_controller_ && owner_controller_.isViewLoaded) {
     this->attachView();
   }
   // Do not call `NotifyCreated()` here - let FlutterViewController take care
@@ -104,17 +112,16 @@ void PlatformViewIOS::SetOwnerViewController(fml::WeakPtr<FlutterViewController>
 
 void PlatformViewIOS::attachView() {
   FML_DCHECK(owner_controller_);
-  FML_DCHECK(owner_controller_.get().isViewLoaded)
-      << "FlutterViewController's view should be loaded "
-         "before attaching to PlatformViewIOS.";
-  auto flutter_view = static_cast<FlutterView*>(owner_controller_.get().view);
-  auto ca_layer = fml::scoped_nsobject<CALayer>{[[flutter_view layer] retain]};
+  FML_DCHECK(owner_controller_.isViewLoaded) << "FlutterViewController's view should be loaded "
+                                                "before attaching to PlatformViewIOS.";
+  FlutterView* flutter_view = static_cast<FlutterView*>(owner_controller_.view);
+  CALayer* ca_layer = flutter_view.layer;
   ios_surface_ = IOSSurface::Create(ios_context_, ca_layer);
   FML_DCHECK(ios_surface_ != nullptr);
 
   if (accessibility_bridge_) {
     accessibility_bridge_.Set(std::make_unique<AccessibilityBridge>(
-        owner_controller_.get(), this, [owner_controller_.get() platformViewsController]));
+        owner_controller_, this, owner_controller_.platformViewsController));
   }
 }
 
@@ -126,8 +133,7 @@ PointerDataDispatcherMaker PlatformViewIOS::GetDispatcherMaker() {
 
 void PlatformViewIOS::RegisterExternalTexture(int64_t texture_id,
                                               NSObject<FlutterTexture>* texture) {
-  RegisterTexture(ios_context_->CreateExternalTexture(
-      texture_id, fml::scoped_nsobject<NSObject<FlutterTexture>>{[texture retain]}));
+  RegisterTexture(ios_context_->CreateExternalTexture(texture_id, texture));
 }
 
 // |PlatformView|
@@ -153,6 +159,11 @@ sk_sp<GrDirectContext> PlatformViewIOS::CreateResourceContext() const {
 }
 
 // |PlatformView|
+std::shared_ptr<impeller::Context> PlatformViewIOS::GetImpellerContext() const {
+  return ios_context_->GetImpellerContext();
+}
+
+// |PlatformView|
 void PlatformViewIOS::SetSemanticsEnabled(bool enabled) {
   if (!owner_controller_) {
     FML_LOG(WARNING) << "Could not set semantics to enabled, this "
@@ -161,7 +172,7 @@ void PlatformViewIOS::SetSemanticsEnabled(bool enabled) {
   }
   if (enabled && !accessibility_bridge_) {
     accessibility_bridge_.Set(std::make_unique<AccessibilityBridge>(
-        owner_controller_.get(), this, [owner_controller_.get() platformViewsController]));
+        owner_controller_, this, owner_controller_.platformViewsController));
   } else if (!enabled && accessibility_bridge_) {
     accessibility_bridge_.Clear();
   } else {
@@ -179,9 +190,9 @@ void PlatformViewIOS::UpdateSemantics(flutter::SemanticsNodeUpdates update,
                                       flutter::CustomAccessibilityActionUpdates actions) {
   FML_DCHECK(owner_controller_);
   if (accessibility_bridge_) {
-    accessibility_bridge_.get()->UpdateSemantics(std::move(update), std::move(actions));
+    accessibility_bridge_.get()->UpdateSemantics(std::move(update), actions);
     [[NSNotificationCenter defaultCenter] postNotificationName:FlutterSemanticsUpdateNotification
-                                                        object:owner_controller_.get()];
+                                                        object:owner_controller_];
   }
 }
 
@@ -197,8 +208,8 @@ void PlatformViewIOS::OnPreEngineRestart() const {
   if (!owner_controller_) {
     return;
   }
-  [owner_controller_.get() platformViewsController]->Reset();
-  [[owner_controller_.get() restorationPlugin] reset];
+  [owner_controller_.platformViewsController reset];
+  [owner_controller_.restorationPlugin reset];
 }
 
 std::unique_ptr<std::vector<std::string>> PlatformViewIOS::ComputePlatformResolvedLocales(
@@ -208,9 +219,12 @@ std::unique_ptr<std::vector<std::string>> PlatformViewIOS::ComputePlatformResolv
       [NSMutableArray arrayWithCapacity:supported_locale_data.size() / localeDataLength];
   for (size_t i = 0; i < supported_locale_data.size(); i += localeDataLength) {
     NSDictionary<NSString*, NSString*>* dict = @{
-      NSLocaleLanguageCode : [NSString stringWithUTF8String:supported_locale_data[i].c_str()],
-      NSLocaleCountryCode : [NSString stringWithUTF8String:supported_locale_data[i + 1].c_str()],
+      NSLocaleLanguageCode : [NSString stringWithUTF8String:supported_locale_data[i].c_str()]
+          ?: @"",
+      NSLocaleCountryCode : [NSString stringWithUTF8String:supported_locale_data[i + 1].c_str()]
+          ?: @"",
       NSLocaleScriptCode : [NSString stringWithUTF8String:supported_locale_data[i + 2].c_str()]
+          ?: @""
     };
     [supported_locale_identifiers addObject:[NSLocale localeIdentifierFromComponents:dict]];
   }
@@ -221,25 +235,22 @@ std::unique_ptr<std::vector<std::string>> PlatformViewIOS::ComputePlatformResolv
   std::unique_ptr<std::vector<std::string>> out = std::make_unique<std::vector<std::string>>();
 
   if (result != nullptr && [result count] > 0) {
-    if (@available(ios 10.0, *)) {
-      NSLocale* locale = [NSLocale localeWithLocaleIdentifier:[result firstObject]];
-      NSString* languageCode = [locale languageCode];
-      out->emplace_back(languageCode == nullptr ? "" : languageCode.UTF8String);
-      NSString* countryCode = [locale countryCode];
-      out->emplace_back(countryCode == nullptr ? "" : countryCode.UTF8String);
-      NSString* scriptCode = [locale scriptCode];
-      out->emplace_back(scriptCode == nullptr ? "" : scriptCode.UTF8String);
-    }
+    NSLocale* locale = [NSLocale localeWithLocaleIdentifier:[result firstObject]];
+    NSString* languageCode = [locale languageCode];
+    out->emplace_back(languageCode == nullptr ? "" : languageCode.UTF8String);
+    NSString* countryCode = [locale countryCode];
+    out->emplace_back(countryCode == nullptr ? "" : countryCode.UTF8String);
+    NSString* scriptCode = [locale scriptCode];
+    out->emplace_back(scriptCode == nullptr ? "" : scriptCode.UTF8String);
   }
   return out;
 }
 
-PlatformViewIOS::ScopedObserver::ScopedObserver() : observer_(nil) {}
+PlatformViewIOS::ScopedObserver::ScopedObserver() {}
 
 PlatformViewIOS::ScopedObserver::~ScopedObserver() {
   if (observer_) {
     [[NSNotificationCenter defaultCenter] removeObserver:observer_];
-    [observer_ release];
   }
 }
 
@@ -247,7 +258,6 @@ void PlatformViewIOS::ScopedObserver::reset(id<NSObject> observer) {
   if (observer != observer_) {
     if (observer_) {
       [[NSNotificationCenter defaultCenter] removeObserver:observer_];
-      [observer_ release];
     }
     observer_ = observer;
   }

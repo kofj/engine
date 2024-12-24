@@ -12,6 +12,9 @@ enum PointerChange {
   down,
   move,
   up,
+  panZoomStart,
+  panZoomUpdate,
+  panZoomEnd,
 }
 
 enum PointerDeviceKind {
@@ -19,17 +22,23 @@ enum PointerDeviceKind {
   mouse,
   stylus,
   invertedStylus,
+  trackpad,
   unknown
 }
 
 enum PointerSignalKind {
   none,
   scroll,
+  scrollInertiaCancel,
+  scale,
   unknown
 }
 
+typedef PointerDataRespondCallback = void Function({bool allowPlatformDefault});
+
 class PointerData {
   const PointerData({
+    this.viewId = 0,
     this.embedderId = 0,
     this.timeStamp = Duration.zero,
     this.change = PointerChange.cancel,
@@ -59,7 +68,15 @@ class PointerData {
     this.platformData = 0,
     this.scrollDeltaX = 0.0,
     this.scrollDeltaY = 0.0,
-  });
+    this.panX = 0.0,
+    this.panY = 0.0,
+    this.panDeltaX = 0.0,
+    this.panDeltaY = 0.0,
+    this.scale = 0.0,
+    this.rotation = 0.0,
+    PointerDataRespondCallback? onRespond,
+  }) : _onRespond = onRespond;
+  final int viewId;
   final int embedderId;
   final Duration timeStamp;
   final PointerChange change;
@@ -89,9 +106,22 @@ class PointerData {
   final int platformData;
   final double scrollDeltaX;
   final double scrollDeltaY;
+  final double panX;
+  final double panY;
+  final double panDeltaX;
+  final double panDeltaY;
+  final double scale;
+  final double rotation;
+  final PointerDataRespondCallback? _onRespond;
+
+  void respond({required bool allowPlatformDefault}) {
+    if (_onRespond != null) {
+      _onRespond(allowPlatformDefault: allowPlatformDefault);
+    }
+  }
 
   @override
-  String toString() => 'PointerData(x: $physicalX, y: $physicalY)';
+  String toString() => 'PointerData(viewId: $viewId, x: $physicalX, y: $physicalY)';
   String toStringFull() {
     return '$runtimeType('
            'embedderId: $embedderId, '
@@ -121,13 +151,19 @@ class PointerData {
            'tilt: $tilt, '
            'platformData: $platformData, '
            'scrollDeltaX: $scrollDeltaX, '
-           'scrollDeltaY: $scrollDeltaY'
+           'scrollDeltaY: $scrollDeltaY, '
+           'panX: $panX, '
+           'panY: $panY, '
+           'panDeltaX: $panDeltaX, '
+           'panDeltaY: $panDeltaY, '
+           'scale: $scale, '
+           'rotation: $rotation, '
+           'viewId: $viewId'
            ')';
   }
 }
 
 class PointerDataPacket {
-  const PointerDataPacket({this.data = const <PointerData>[]})
-      : assert(data != null); // ignore: unnecessary_null_comparison
+  const PointerDataPacket({this.data = const <PointerData>[]});
   final List<PointerData> data;
 }

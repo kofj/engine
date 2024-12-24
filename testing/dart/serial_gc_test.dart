@@ -4,13 +4,18 @@
 
 // FlutterTesterOptions=--enable-serial-gc
 
-import 'package:litetest/litetest.dart';
+import 'package:test/test.dart';
+
+int use(List<int> a) {
+  return a[0];
+}
 
 void main() {
   test('Serial GC option test ', () async {
-    bool threw = false;
+    const bool threw = false;
     for (int i = 0; i < 100; i++) {
-      var a = <int>[100];
+      final List<int> a = <int>[100];
+      use(a);
     }
     expect(threw, false);
   });

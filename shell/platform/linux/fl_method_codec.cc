@@ -7,9 +7,6 @@
 
 #include <gmodule.h>
 
-// Added here to stop the compiler from optimizing this function away.
-G_MODULE_EXPORT GType fl_method_codec_get_type();
-
 G_DEFINE_TYPE(FlMethodCodec, fl_method_codec, G_TYPE_OBJECT)
 
 static void fl_method_codec_class_init(FlMethodCodecClass* klass) {}
@@ -60,6 +57,32 @@ GBytes* fl_method_codec_encode_error_envelope(FlMethodCodec* self,
 
   return FL_METHOD_CODEC_GET_CLASS(self)->encode_error_envelope(
       self, code, message, details, error);
+}
+
+GBytes* fl_method_codec_encode_response(FlMethodCodec* self,
+                                        FlMethodResponse* response,
+                                        GError** error) {
+  g_return_val_if_fail(FL_IS_METHOD_CODEC(self), nullptr);
+  g_return_val_if_fail(FL_IS_METHOD_SUCCESS_RESPONSE(response) ||
+                           FL_IS_METHOD_ERROR_RESPONSE(response) ||
+                           FL_IS_METHOD_NOT_IMPLEMENTED_RESPONSE(response),
+                       nullptr);
+
+  if (FL_IS_METHOD_SUCCESS_RESPONSE(response)) {
+    FlMethodSuccessResponse* r = FL_METHOD_SUCCESS_RESPONSE(response);
+    return fl_method_codec_encode_success_envelope(
+        self, fl_method_success_response_get_result(r), error);
+  } else if (FL_IS_METHOD_ERROR_RESPONSE(response)) {
+    FlMethodErrorResponse* r = FL_METHOD_ERROR_RESPONSE(response);
+    return fl_method_codec_encode_error_envelope(
+        self, fl_method_error_response_get_code(r),
+        fl_method_error_response_get_message(r),
+        fl_method_error_response_get_details(r), error);
+  } else if (FL_IS_METHOD_NOT_IMPLEMENTED_RESPONSE(response)) {
+    return g_bytes_new(nullptr, 0);
+  } else {
+    g_assert_not_reached();
+  }
 }
 
 FlMethodResponse* fl_method_codec_decode_response(FlMethodCodec* self,

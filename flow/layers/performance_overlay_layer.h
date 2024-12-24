@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "flutter/flow/instrumentation.h"
 #include "flutter/flow/layers/layer.h"
+#include "flutter/flow/stopwatch.h"
 #include "flutter/fml/macros.h"
 
 class SkTextBlob;
@@ -22,9 +22,11 @@ const int kVisualizeEngineStatistics = 1 << 3;
 
 class PerformanceOverlayLayer : public Layer {
  public:
+  static SkFont MakeStatisticsFont(std::string_view font_path);
+
   static sk_sp<SkTextBlob> MakeStatisticsText(const Stopwatch& stopwatch,
-                                              const std::string& label_prefix,
-                                              const std::string& font_path);
+                                              const SkFont& font,
+                                              std::string_view label_prefix);
 
   bool IsReplacing(DiffContext* context, const Layer* layer) const override {
     return layer->as_performance_overlay_layer() != nullptr;
@@ -39,6 +41,7 @@ class PerformanceOverlayLayer : public Layer {
   explicit PerformanceOverlayLayer(uint64_t options,
                                    const char* font_path = nullptr);
 
+  void Preroll(PrerollContext* context) override {}
   void Paint(PaintContext& context) const override;
 
  private:

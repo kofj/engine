@@ -11,7 +11,7 @@ part of ui;
 /// `a`, `b`, and `t` are required to be finite or null, and the result of `a +
 /// (b - a) * t` is returned, where nulls are defaulted to 0.0.
 double? lerpDouble(num? a, num? b, double t) {
-  if (a == b || (a?.isNaN == true) && (b?.isNaN == true)) {
+  if (a == b || (a?.isNaN ?? false) && (b?.isNaN ?? false)) {
     return a?.toDouble();
   }
   a ??= 0.0;
@@ -26,12 +26,5 @@ double? lerpDouble(num? a, num? b, double t) {
 ///
 /// Same as [lerpDouble] but specialized for non-null `double` type.
 double _lerpDouble(double a, double b, double t) {
-  return a * (1.0 - t) + b * t;
-}
-
-/// Linearly interpolate between two integers.
-///
-/// Same as [lerpDouble] but specialized for non-null `int` type.
-double _lerpInt(int a, int b, double t) {
   return a * (1.0 - t) + b * t;
 }
